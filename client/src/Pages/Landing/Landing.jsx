@@ -1,7 +1,7 @@
 import React, { useState } from "react"
 import style from "./landing.module.css"
 import LoginPage from "../Auth/LoginPage/LoginPage"
-import SigninPage from "../Auth/SigninPage/SigninPage"
+import SigninPage from "../Auth/signinpage/SigninPage"
 import LayOut from "../../Component/Layout/Layout"
 // import ForgetPassword from "../Auth/ForgetPassword"
 import About from "../../Component/About/About"
