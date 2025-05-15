@@ -1,100 +1,259 @@
-const DBConnection = require("../db/dbconfig")
-const bcrypt = require("bcrypt")
+const DBConnection = require("../db/dbConfig");
+const bcrypt = require("bcrypt");
+const { StatusCodes } = require("http-status-codes");
+const jwt = require("jsonwebtoken");
 
-const { StatusCodes } = require("http-status-codes")
-const jwt = require("jsonwebtoken")
-
+// ========== Register (Updated to handle role_id and profession) ==========
 const register = async (req, res) => {
-  const { username, email, password, firstname, lastname } = req.body
-  if (!username || !email || !password || !firstname || !lastname) {
-    return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ msg: "All input is required" })
+  const {
+    username,
+    email,
+    password,
+    firstname,
+    lastname,
+    profession,
+    role_id = 2,
+  } = req.body;
+
+  if (
+    !username ||
+    !email ||
+    !password ||
+    !firstname ||
+    !lastname ||
+    !profession
+  ) {
+    return res.status(StatusCodes.BAD_REQUEST).json({
+      msg: "All fields are required",
+    });
   }
 
   if (password.length < 8) {
-    return res
-      .status(400)
-      .json({ msg: "Password must be at least 8 characters" })
+    return res.status(StatusCodes.BAD_REQUEST).json({
+      msg: "Password must be at least 8 characters",
+    });
   }
-  try {
-    const [user] = await DBConnection.query(
-      "SELECT username,userid FROM users WHERE email = ? or username = ?",
-      [email, username]
-    )
-    if (user.length > 0) {
-      return res.status(400).json({ msg: "User already exists" })
-    }
-    const salt = await bcrypt.genSalt(10)
-    const hashedPassword = await bcrypt.hash(password, salt)
-    await DBConnection.query(
-      "INSERT INTO users (username,email,password,firstname,lastname) VALUES (?,?,?,?,?)",
-      [username, email, hashedPassword, firstname, lastname]
-    )
-    return res.status(201).json({ msg: "User created" })
-  } catch (error) {
-    return res.status(500).json({ msg: "Internal server error" })
-  }
-}
 
+  try {
+    // Check if user exists
+    const [user] = await DBConnection.query(
+      "SELECT username, userid FROM users WHERE email = ? OR username = ?",
+      [email, username]
+    );
+
+    if (user.length > 0) {
+      return res.status(StatusCodes.BAD_REQUEST).json({
+        msg: "User already exists",
+      });
+    }
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Insert user with role_id and profession
+    await DBConnection.query(
+      "INSERT INTO users (username, email, password, firstname, lastname, profession, role_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [
+        username,
+        email,
+        hashedPassword,
+        firstname,
+        lastname,
+        profession,
+        role_id,
+      ]
+    );
+
+    return res.status(StatusCodes.CREATED).json({
+      msg: "User created successfully",
+      role_id,
+    });
+  } catch (error) {
+    console.error("Registration error:", error);
+    return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      msg: "Registration failed",
+      error: error.message,
+    });
+  }
+};
+
+// ========== Login (Updated with role information) ==========
 const login = async (req, res) => {
-  const { email, password } = req.body
+  const { email, password } = req.body;
 
   if (!email || !password) {
-    return res.status(401).json({ msg: "Please enter all the fields" })
+    return res.status(StatusCodes.BAD_REQUEST).json({
+      msg: "Email and password are required",
+    });
   }
+
+
 
   try {
+    // Get user with role information
     const [user] = await DBConnection.query(
-      "SELECT username, userid, password FROM users WHERE email = ?",
+      `SELECT u.userid, u.username, u.password, r.role_name, r.role_id, u.firstname 
+       FROM users u
+       JOIN roles r ON u.role_id = r.role_id
+       WHERE u.email = ?`,
       [email]
-    )
+    );
+      
 
-    if (user.length == 0) {
-      return res.status(401).json({ msg: "Invalid credentials" })
+    if (user.length === 0) {
+      return res.status(StatusCodes.UNAUTHORIZED).json({
+        msg: "Invalid email or password",
+      });
     }
 
-    const isMatch = await bcrypt.compare(password, user[0].password)
+    // Verify password
+    const isMatch = await bcrypt.compare(password, user[0].password);
     if (!isMatch) {
-      return res.status(401).json({ msg: "Unauthorized" })
+      return res.status(StatusCodes.UNAUTHORIZED).json({
+        msg: "Invalid email or password",
+      });
     }
 
-    const username = user[0].username
-    const userid = user[0].userid
-    const token = jwt.sign({ username, userid }, process.env.JWT_SECRET, {
-      expiresIn: "1d",
-    })
+    // Create token with role information
+    const { userid, username, role_id, role_name, firstname } = user[0];
+    const token = jwt.sign(
+      { userid, username, role_id, role_name },
+      process.env.JWT_SECRET,
+      { expiresIn: "1d" }
+    );
 
-    return res
-      .status(200)
-      .json({ msg: "User login successful", token, username, userid })
+    return res.status(StatusCodes.OK).json({
+      msg: "Login successful",
+      token,
+      user: {
+        userid,
+        username,
+        role_id,
+        role: role_name,
+        firstname
+      },
+    });
   } catch (error) {
-    console.log(error.message)
-    return res.status(500).json({ msg: "Server faced an error" })
+    console.error("Login error:", error);
+    return res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      msg: "Login failed",
+      error: error.message,
+    });
+  }
+};
+
+// ========== Check User ==========
+async function checkUser(req, res) {
+  try {
+    const { username, userid, role_id, role } = req.user;
+    res.status(StatusCodes.OK).json({
+      msg: "Valid user",
+      username,
+      userid,
+      role_id,
+      role,
+    });
+  } catch (error) {
+    console.error("Check user error:", error);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      msg: "Error verifying user",
+    });
   }
 }
-async function checkUser(req, res) {
-  console.log("in check")
-  const username = req.user.username
-  const userid = req.user.userid
-  console.log(username, userid)
-  res.status(StatusCodes.OK).json({ msg: "valid user", username, userid })
-  // res.send("hello this is check user")
-}
+
+// ========== Get Full Name ==========
 async function getFullName(req, res) {
-  console.log("am in full name")
-  const [userfullname] = await DBConnection.query(
-    "SELECT *  FROM users WHERE userid = ?",
-    1
-  )
-  console.log(req.body.userid)
-  //   fullname = userfullname[0].firstname + " " + userfullname[0].lastname
-  //   console.log(
-  //     "user full name",
-  //     userfullname[0].firstname + " " + userfullname[0].lastname
-  //   )
-  //   res.status(StatusCodes.OK).json({ msg: "valid user", fullname })
-  // res.send("hello this is check user")
+  try {
+    const { userid } = req.user;
+    const [userData] = await DBConnection.query(
+      "SELECT firstname, lastname FROM users WHERE userid = ?",
+      [userid]
+    );
+
+    if (userData.length === 0) {
+      return res.status(StatusCodes.NOT_FOUND).json({
+        msg: "User not found",
+      });
+    }
+
+    const fullName = `${userData[0].firstname} ${userData[0].lastname}`;
+    res.status(StatusCodes.OK).json({
+      fullname: fullName,
+    });
+  } catch (error) {
+    console.error("Get full name error:", error);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      msg: "Error fetching user data",
+    });
+  }
 }
 
-module.exports = { login, register, checkUser, getFullName }
+// ========== Get Total Users Only ==========
+async function getUserStats(req, res) {
+  try {
+    const [[{ totalUsers }]] = await DBConnection.query(
+      "SELECT COUNT(*) AS totalUsers FROM users"
+    );
+
+    res.status(StatusCodes.OK).json({
+      totalUsers,
+    });
+  } catch (error) {
+    console.error("Get user count error:", error);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      msg: "Error fetching user count",
+      error: error.message,
+    });
+  }
+}
+
+// ========== Get All Names and Professions ==========
+async function getAllUserNamesAndProfessions(req, res) {
+  try {
+    const [users] = await DBConnection.query(
+      "SELECT userid, firstname, lastname, profession FROM users"
+    );
+
+    const result = users.map((user) => ({
+      userid: user.userid,
+      firstname: user.firstname,
+      lastname: user.lastname,
+      profession: user.profession,
+    }));
+
+    res.status(StatusCodes.OK).json({ users: result });
+  } catch (error) {
+    console.error("Error fetching user names and professions:", error);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      msg: "Error fetching user data",
+      error: error.message,
+    });
+  }
+}
+
+// ========== Delete User ==========
+async function deleteUser(req, res) {
+  try {
+    const { userid } = req.params;
+    await DBConnection.query("DELETE FROM users WHERE userid = ?", [userid]);
+    res.status(StatusCodes.OK).json({ msg: "User deleted successfully" });
+  } catch (error) {
+    console.error("Delete user error:", error);
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR).json({
+      msg: "Failed to delete user",
+      error: error.message,
+    });
+  }
+}
+
+// ========== Exports ==========
+module.exports = {
+  login,
+  register,
+  checkUser,
+  getFullName,
+  getUserStats,
+  getAllUserNamesAndProfessions,
+  deleteUser,
+};
